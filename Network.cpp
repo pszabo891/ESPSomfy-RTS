@@ -573,6 +573,9 @@ bool Network::openSoftAP() {
   this->openingSoftAP = true;
   Serial.println();
   Serial.println("Turning the HotSpot On");
+  // Keep the AP available for initial setup, but reduce the radio transmit power to limit S3 heating.
+  // The ESP32-S3 can otherwise run noticeably hotter in AP mode than on other ESP32 variants.
+  WiFi.setTxPower(WIFI_POWER_2dBm);
   esp_task_wdt_reset(); // Make sure we do not reboot here.
   WiFi.softAP(strlen(settings.hostname) > 0 ? settings.hostname : "ESPSomfy RTS", "");
   delay(200);
