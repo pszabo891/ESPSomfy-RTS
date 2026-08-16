@@ -4825,6 +4825,20 @@ void transceiver_config_t::toJSON(JsonObject& obj) {
     //Serial.printf("SCK:%u MISO:%u MOSI:%u CSN:%u RX:%u TX:%u\n", this->SCKPin, this->MISOPin, this->MOSIPin, this->CSNPin, this->RXPin, this->TXPin);
 }
 */
+bool transceiver_config_t::validForChip() const {
+    esp_chip_info_t ci;
+    esp_chip_info(&ci);
+    if(ci.model != esp_chip_model_t::CHIP_ESP32S3) return true;
+
+    const uint8_t reservedPins[] = {33, 34, 35, 36, 37};
+    const uint8_t pins[] = {this->SCKPin, this->MISOPin, this->MOSIPin, this->CSNPin, this->TXPin, this->RXPin};
+    for(uint8_t i = 0; i < sizeof(pins); i++) {
+      for(uint8_t j = 0; j < sizeof(reservedPins); j++) {
+        if(pins[i] == reservedPins[j]) return false;
+      }
+    }
+    return true;
+}
 void transceiver_config_t::save() {
     pref.begin("CC1101");
     pref.clear();
@@ -4959,65 +4973,62 @@ void transceiver_config_t::load() {
 }
 void transceiver_config_t::apply() {
     somfy.transceiver.disableReceive();
-    bit_length = this->type;    
+    bit_length = this->type;
+
+    if(!this->validForChip()) {
+      Serial.printf("CC1101 pin map invalid for ESP32-S3: SCK=%u MISO=%u MOSI=%u CSN=%u RX=%u TX=%u. Disabling radio to avoid reserved GPIO 33-37 bus conflict.\n",
+        this->SCKPin, this->MISOPin, this->MOSIPin, this->CSNPin, this->RXPin, this->TXPin);
+      this->enabled = false;
+      this->radioInit = false;
+      pref.begin("CC1101");
+      pref.putBool("enabled", false);
+      pref.putBool("radioInit", false);
+      pref.end();
+      return;
+    }
+
     if(this->enabled) {
       bool radioInit = true;
       pref.begin("CC1101");
       radioInit = pref.getBool("radioInit", true);
-      // If the radio locks up then we can simply reboot and re-enable the radio.
       pref.putBool("radioInit", false);
       this->radioInit = false;
       pref.end();
       if(!radioInit) return;
       Serial.print("Applying radio settings ");
       Serial.printf("Setting Data Pins RX:%u TX:%u\n", this->RXPin, this->TXPin);
-      //if(this->TXPin != this->RXPin)
-      //  pinMode(this->TXPin, OUTPUT);
-      //pinMode(this->RXPin, INPUT);
-      // Essentially these call only preform the two functions above.
+
+      pinMode(this->SCKPin, INPUT_PULLUP);
+      pinMode(this->MISOPin, INPUT_PULLUP);
+      pinMode(this->MOSIPin, INPUT_PULLUP);
+      pinMode(this->CSNPin, OUTPUT);
+      digitalWrite(this->CSNPin, HIGH);
+
       if(this->TXPin == this->RXPin)
-        ELECHOUSE_cc1101.setGDO0(this->TXPin); // This pin may be shared.
+        ELECHOUSE_cc1101.setGDO0(this->TXPin);
       else
-        ELECHOUSE_cc1101.setGDO(this->TXPin, this->RXPin); // GDO0, GDO2
+        ELECHOUSE_cc1101.setGDO(this->TXPin, this->RXPin);
       Serial.printf("Setting SPI Pins SCK:%u MISO:%u MOSI:%u CSN:%u\n", this->SCKPin, this->MISOPin, this->MOSIPin, this->CSNPin);
       ELECHOUSE_cc1101.setSpiPin(this->SCKPin, this->MISOPin, this->MOSIPin, this->CSNPin);
       Serial.println("Radio Pins Configured!");
       ELECHOUSE_cc1101.Init();
-      ELECHOUSE_cc1101.setCCMode(0);                            // set config for internal transmission mode.
-      ELECHOUSE_cc1101.setMHZ(this->frequency);                 // Here you can set your basic frequency. The lib calculates the frequency automatically (default = 433.92).The cc1101 can: 300-348 MHZ, 387-464MHZ and 779-928MHZ. Read More info from datasheet.
-      ELECHOUSE_cc1101.setRxBW(this->rxBandwidth);              // Set the Receive Bandwidth in kHz. Value from 58.03 to 812.50. Default is 812.50 kHz.
-      ELECHOUSE_cc1101.setDeviation(this->deviation);           // Set the Frequency deviation in kHz. Value from 1.58 to 380.85. Default is 47.60 kHz.
-      ELECHOUSE_cc1101.setPA(this->txPower);                    // Set TxPower. The following settings are possible depending on the frequency band.  (-30  -20  -15  -10  -6    0    5    7    10   11   12) Default is max!
-      ELECHOUSE_cc1101.setModulation(2);                        // Set modulation mode. 0 = 2-FSK, 1 = GFSK, 2 = ASK/OOK, 3 = 4-FSK, 4 = MSK.
-      ELECHOUSE_cc1101.setManchester(1);                        // Enables Manchester encoding/decoding. 0 = Disable. 1 = Enable.
-      ELECHOUSE_cc1101.setPktFormat(3);                         // Format of RX and TX data. 
-                                                                // 0 = Normal mode, use FIFOs for RX and TX. 
-                                                                // 1 = Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins. 
-                                                                // 2 = Random TX mode; sends random data using PN9 generator. Used for test. Works as normal mode, setting 0 (00), in RX. 
-                                                                // 3 = Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins.
-      ELECHOUSE_cc1101.setDcFilterOff(0);                       // Disable digital DC blocking filter before demodulator. Only for data rates â‰¤ 250 kBaud The recommended IF frequency changes when the DC blocking is disabled. 
-                                                                // 1 = Disable (current optimized). 
-                                                                // 0 = Enable (better sensitivity).
-      ELECHOUSE_cc1101.setCrc(0);                               // 1 = CRC calculation in TX and CRC check in RX enabled. 0 = CRC disabled for TX and RX.
-      ELECHOUSE_cc1101.setCRC_AF(0);                            // Enable automatic flush of RX FIFO when CRC is not OK. This requires that only one packet is in the RXIFIFO and that packet length is limited to the RX FIFO size.
-      ELECHOUSE_cc1101.setSyncMode(4);                          // Combined sync-word qualifier mode. 
-                                                                // 0 = No preamble/sync. 
-                                                                // 1 = 16 sync word bits detected. 
-                                                                // 2 = 16/16 sync word bits detected. 
-                                                                // 3 = 30/32 sync word bits detected. 
-                                                                // 4 = No preamble/sync, carrier-sense above threshold. 
-                                                                // 5 = 15/16 + carrier-sense above threshold. 
-                                                                // 6 = 16/16 + carrier-sense above threshold. 
-                                                                // 7 = 30/32 + carrier-sense above threshold.
-      ELECHOUSE_cc1101.setAdrChk(0);                            // Controls address check configuration of received packages. 
-                                                                // 0 = No address check. 
-                                                                // 1 = Address check, no broadcast. 
-                                                                // 2 = Address check and 0 (0x00) broadcast. 
-                                                                // 3 = Address check and 0 (0x00) and 255 (0xFF) broadcast.
-    
-      
+      ELECHOUSE_cc1101.setCCMode(0);
+      ELECHOUSE_cc1101.setMHZ(this->frequency);
+      ELECHOUSE_cc1101.setRxBW(this->rxBandwidth);
+      ELECHOUSE_cc1101.setDeviation(this->deviation);
+      ELECHOUSE_cc1101.setPA(this->txPower);
+      ELECHOUSE_cc1101.setModulation(2);
+      ELECHOUSE_cc1101.setManchester(1);
+      ELECHOUSE_cc1101.setPktFormat(3);
+      ELECHOUSE_cc1101.setDcFilterOff(0);
+      ELECHOUSE_cc1101.setCrc(0);
+      ELECHOUSE_cc1101.setCRC_AF(0);
+      ELECHOUSE_cc1101.setSyncMode(4);
+      ELECHOUSE_cc1101.setAdrChk(0);
+
       if (!ELECHOUSE_cc1101.getCC1101()) {
-          Serial.println("Error setting up the radio");
+          Serial.println("Error setting up the radio; leaving it disabled and idle.");
+          this->enabled = false;
           this->radioInit = false;
       }
       else {
@@ -5026,9 +5037,10 @@ void transceiver_config_t::apply() {
           this->radioInit = true;
       }
       pref.begin("CC1101");
-      pref.putBool("radioInit", true);
+      pref.putBool("enabled", this->enabled);
+      pref.putBool("radioInit", this->radioInit);
       pref.end();
-      
+
     }
     else {
       if(this->radioInit) ELECHOUSE_cc1101.setSidle();
