@@ -21,9 +21,11 @@ GitUpdater git;
 
 uint32_t oldheap = 0;
 void setup() {
+  setCpuFrequencyMhz(160);
   Serial.begin(115200);
   Serial.println();
   Serial.println("Startup/Boot....");
+  Serial.printf("CPU freq: %dMHz\n", getCpuFrequencyMhz());
   Serial.println("Mounting File System...");
   if(LittleFS.begin()) Serial.println("File system mounted successfully");
   else Serial.println("Error mounting file system");
